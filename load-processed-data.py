@@ -3,15 +3,15 @@ import torchvision.transforms as transforms
 from PIL import Image
 import io
 import torch
-from google.cloud import storage
+import boto3
 
-# Google Cloud Storage settings
-GCS_BUCKET = "super-resolution-images"
+# AWS S3 Settings
+S3_BUCKET = "images-resolution"
 HR_FOLDER = "DIV2K_train_HR"
-LR_FOLDER = "DIV2K_train_LR"
+LR_FOLDER = "DIV2K_train_LR_bicubic_X4"
 
-# Initialize GCS Client
-storage_client = storage.Client()
+# Initialize S3 Client
+s3_client = boto3.client("s3")
 
 # Define transformations
 transform = transforms.Compose([
@@ -28,7 +28,7 @@ class SRDataset(Dataset):
         return len(self.lr_paths)
 
     def __getitem__(self, idx):
-        # Read images from GCS
+        # Read images from S3
         hr_image = self.load_image(self.hr_paths[idx])
         lr_image = self.load_image(self.lr_paths[idx])
 
@@ -38,23 +38,19 @@ class SRDataset(Dataset):
 
         return lr_image, hr_image
 
-    def load_image(self, gcs_path):
-        """Loads an image from GCS."""
-        bucket_name = gcs_path.split('/')[2]
-        blob_path = '/'.join(gcs_path.split('/')[3:])
-        
-        bucket = storage_client.bucket(bucket_name)
-        blob = bucket.blob(blob_path)
-        image_bytes = blob.download_as_bytes()
-
+    def load_image(self, s3_path):
+        """Loads an image from S3 bucket."""
+        key = "/".join(s3_path.split("/")[3:])  # Extract S3 key
+        response = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
+        image_bytes = response["Body"].read()
         return Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
 # Load HR and LR image paths
-hr_image_paths = [f"gs://{GCS_BUCKET}/{HR_FOLDER}/{blob.name.split('/')[-1]}" 
-                  for blob in storage_client.bucket(GCS_BUCKET).list_blobs(prefix=HR_FOLDER)]
+hr_image_paths = [f"s3://{S3_BUCKET}/{HR_FOLDER}/{obj['Key'].split('/')[-1]}"
+                  for obj in s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix=HR_FOLDER)["Contents"]]
 
-lr_image_paths = [f"gs://{GCS_BUCKET}/{LR_FOLDER}/{blob.name.split('/')[-1]}" 
-                  for blob in storage_client.bucket(GCS_BUCKET).list_blobs(prefix=LR_FOLDER)]
+lr_image_paths = [f"s3://{S3_BUCKET}/{LR_FOLDER}/{obj['Key'].split('/')[-1]}"
+                  for obj in s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix=LR_FOLDER)["Contents"]]
 
 # Create dataset and dataloader
 dataset = SRDataset(hr_paths=hr_image_paths, lr_paths=lr_image_paths, transform=transform)

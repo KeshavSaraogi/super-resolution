@@ -6,79 +6,59 @@ from PIL import Image
 import numpy as np
 import cv2
 import os
-from google.cloud import storage
+import boto3
 
-# Define Google Cloud Storage (GCS) bucket and dataset paths
-GCS_BUCKET = "super-resolution-images"
+# Define AWS S3 bucket and dataset paths
+S3_BUCKET = "images-resolution"
 HR_FOLDER = "DIV2K_train_HR"
-LR_FOLDER = "DIV2K_train_LR"
-HR_IMAGE_PATH = f"gs://{GCS_BUCKET}/{HR_FOLDER}/"
-LR_IMAGE_PATH = f"gs://{GCS_BUCKET}/{LR_FOLDER}/"
+LR_FOLDER = "DIV2K_train_LR_bicubic_X4"
+HR_IMAGE_PATH = f"s3://{S3_BUCKET}/{HR_FOLDER}/"
+LR_IMAGE_PATH = f"s3://{S3_BUCKET}/{LR_FOLDER}/"
 
 spark = SparkSession.builder \
     .appName("DIV2K Preprocessing") \
-    .config("spark.hadoop.fs.gs.impl", "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem") \
-    .config("spark.hadoop.google.cloud.auth.service.account.enable", "true") \
+    .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
     .getOrCreate()
 
-# Initialize GCS Client
-storage_client = storage.Client()
+# Initialize S3 Client
+s3_client = boto3.client("s3")
 
-def read_image_from_gcs(image_path):
-    """Reads an image from Google Cloud Storage and converts it to a NumPy array."""
-    bucket_name = image_path.split('/')[2]
-    blob_path = '/'.join(image_path.split('/')[3:])
-    
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(blob_path)
-    image_bytes = blob.download_as_bytes()
-    
+def read_image_from_s3(image_path):
+    """Reads an image from S3 and converts it to a NumPy array."""
+    key = "/".join(image_path.split("/")[3:])
+    response = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
+    image_bytes = response["Body"].read()
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
     return np.array(image)
 
 def generate_lr_image(image_path):
-    """Reads an HR image from GCS, downsamples it (x4), and saves it as an LR image in GCS."""
-
-    # Initialize GCS Client inside the function
-    storage_client = storage.Client()
-
-    # Extract bucket name and file path
-    bucket_name = image_path.split('/')[2]
-    blob_path = '/'.join(image_path.split('/')[3:])
-
-    # Read image from GCS
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(blob_path)
-    image_bytes = blob.download_as_bytes()
-
-    # Convert image to NumPy array
+    """Reads an HR image from S3, downsamples it (x4), and saves it as an LR image in S3."""
+    key = "/".join(image_path.split("/")[3:])
+    response = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
+    image_bytes = response["Body"].read()
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
     hr_image = np.array(image)
 
     # Downscale using bicubic interpolation (x4)
     lr_image = cv2.resize(hr_image, (hr_image.shape[1] // 4, hr_image.shape[0] // 4), interpolation=cv2.INTER_CUBIC)
 
-    # Generate the correct LR image path
-    filename = os.path.basename(image_path)  # Get only the filename
-    lr_image_path = f"{LR_IMAGE_PATH}{filename}"  # Ensure correct storage path in GCS
+    # Generate LR image path
+    filename = os.path.basename(image_path)
+    lr_image_key = f"{LR_FOLDER}/{filename}"
 
-    # Upload LR image to GCS
-    bucket = storage_client.bucket(GCS_BUCKET)
-    blob = bucket.blob(f"{LR_FOLDER}/{filename}")
-
+    # Upload LR image to S3
     _, buffer = cv2.imencode('.png', lr_image)
-    blob.upload_from_string(buffer.tobytes(), content_type='image/png')
+    s3_client.put_object(Bucket=S3_BUCKET, Key=lr_image_key, Body=buffer.tobytes(), ContentType='image/png')
 
-    return lr_image_path
-
+    return f"s3://{S3_BUCKET}/{lr_image_key}"
 
 # Register UDF for Spark processing
 generate_lr_udf = udf(generate_lr_image, StringType())
 
-# Load HR image paths from GCS into Spark DataFrame
+# Load HR image paths from S3 into Spark DataFrame
 hr_image_paths = [
-    f"gs://{GCS_BUCKET}/{HR_FOLDER}/{blob.name.split('/')[-1]}"
-    for blob in storage_client.bucket(GCS_BUCKET).list_blobs(prefix=HR_FOLDER)
+    f"s3://{S3_BUCKET}/{HR_FOLDER}/{obj['Key'].split('/')[-1]}"
+    for obj in s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix=HR_FOLDER)["Contents"]
 ]
 
 hr_image_df = spark.createDataFrame([(path,) for path in hr_image_paths], ["image_path"])

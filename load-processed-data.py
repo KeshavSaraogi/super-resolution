@@ -8,7 +8,7 @@ import boto3
 # AWS S3 Settings
 S3_BUCKET = "images-resolution"
 HR_FOLDER = "DIV2K_train_HR"
-LR_FOLDER = "DIV2K_train_LR_bicubic_X4"
+LR_FOLDER = "DIV2K_train_LR"
 
 # Initialize S3 Client
 s3_client = boto3.client("s3")

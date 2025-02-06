@@ -1,73 +1,64 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, udf
 from pyspark.sql.types import StringType
-from io import BytesIO
-from PIL import Image
-import numpy as np
-import cv2
-import os
 import boto3
+import io
+from PIL import Image
 
-# Define AWS S3 bucket and dataset paths
+# Constants
 S3_BUCKET = "images-resolution"
 HR_FOLDER = "DIV2K_train_HR"
-LR_FOLDER = "DIV2K_train_LR_bicubic_X4"
-HR_IMAGE_PATH = f"s3://{S3_BUCKET}/{HR_FOLDER}/"
-LR_IMAGE_PATH = f"s3://{S3_BUCKET}/{LR_FOLDER}/"
+LR_FOLDER = "DIV2K_train_LR"
 
-spark = SparkSession.builder \
-    .appName("DIV2K Preprocessing") \
-    .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
-    .getOrCreate()
+# Initialize Spark session
+spark = SparkSession.builder.appName("DIV2K Preprocessing").getOrCreate()
 
-# Initialize S3 Client
+# Initialize S3 client (ONCE, outside UDF)
 s3_client = boto3.client("s3")
 
-def read_image_from_s3(image_path):
-    """Reads an image from S3 and converts it to a NumPy array."""
-    key = "/".join(image_path.split("/")[3:])
-    response = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
-    image_bytes = response["Body"].read()
-    image = Image.open(BytesIO(image_bytes)).convert("RGB")
-    return np.array(image)
+def process_image(hr_image_path):
+    """
+    Download HR image from S3, generate LR image in-memory, and upload it back to S3.
+    """
+    try:
+        # Extract bucket name and key
+        bucket_name, key = hr_image_path.replace("s3://", "").split("/", 1)
 
-def generate_lr_image(image_path):
-    """Reads an HR image from S3, downsamples it (x4), and saves it as an LR image in S3."""
-    key = "/".join(image_path.split("/")[3:])
-    response = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
-    image_bytes = response["Body"].read()
-    image = Image.open(BytesIO(image_bytes)).convert("RGB")
-    hr_image = np.array(image)
+        # Read image from S3
+        response = s3_client.get_object(Bucket=bucket_name, Key=key)
+        img = Image.open(io.BytesIO(response["Body"].read())).convert("RGB")
 
-    # Downscale using bicubic interpolation (x4)
-    lr_image = cv2.resize(hr_image, (hr_image.shape[1] // 4, hr_image.shape[0] // 4), interpolation=cv2.INTER_CUBIC)
+        # Resize image (bicubic downsampling)
+        lr_img = img.resize((img.width // 4, img.height // 4), Image.BICUBIC)
 
-    # Generate LR image path
-    filename = os.path.basename(image_path)
-    lr_image_key = f"{LR_FOLDER}/{filename}"
+        # Convert image to bytes for direct S3 upload
+        buffer = io.BytesIO()
+        lr_img.save(buffer, format="PNG")
+        buffer.seek(0)
 
-    # Upload LR image to S3
-    _, buffer = cv2.imencode('.png', lr_image)
-    s3_client.put_object(Bucket=S3_BUCKET, Key=lr_image_key, Body=buffer.tobytes(), ContentType='image/png')
+        # Generate LR image S3 path
+        lr_key = key.replace(HR_FOLDER, LR_FOLDER)
 
-    return f"s3://{S3_BUCKET}/{lr_image_key}"
+        # Upload LR image to S3
+        s3_client.put_object(Bucket=S3_BUCKET, Key=lr_key, Body=buffer, ContentType="image/png")
 
-# Register UDF for Spark processing
-generate_lr_udf = udf(generate_lr_image, StringType())
+        return f"s3://{S3_BUCKET}/{lr_key}"
+    except Exception as e:
+        print(f"Error processing {hr_image_path}: {e}")
+        return None
 
-# Load HR image paths from S3 into Spark DataFrame
-hr_image_paths = [
-    f"s3://{S3_BUCKET}/{HR_FOLDER}/{obj['Key'].split('/')[-1]}"
-    for obj in s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix=HR_FOLDER)["Contents"]
-]
+# Fetch HR image paths from S3 (OUTSIDE UDF)
+hr_objects = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix=HR_FOLDER).get("Contents", [])
+hr_image_paths = [f"s3://{S3_BUCKET}/{obj['Key']}" for obj in hr_objects if obj["Key"].endswith(".png")]
 
-hr_image_df = spark.createDataFrame([(path,) for path in hr_image_paths], ["image_path"])
+# Process images in a loop (NO UDF)
+processed_images = [(path, process_image(path)) for path in hr_image_paths]
 
-# Generate and store LR images using Spark
-lr_image_df = hr_image_df.withColumn("lr_image_path", generate_lr_udf(col("image_path")))
+# Convert to DataFrame
+df = spark.createDataFrame(processed_images, ["image_path", "lr_image_path"])
 
 # Show results
-lr_image_df.show()
+df.show()
 
 # Stop Spark session
 spark.stop()

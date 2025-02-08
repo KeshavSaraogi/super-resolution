@@ -34,18 +34,8 @@ class SRCNN(nn.Module):
         return x
 
 # Load images from S3
-def save_image_to_s3(img, s3_path):
-    """ Saves a PIL image to S3 """
-    buffer = io.BytesIO()
-    img.save(buffer, format="PNG")
-    buffer.seek(0)
-    s3_client.put_object(Bucket=S3_BUCKET, Key=s3_path, Body=buffer)
-    print(f"✅ Saved {s3_path} to S3")
-
 def load_images_from_s3(lr_image_path, hr_image_path):
     try:
-        print(f"📥 Loading images: {lr_image_path}, {hr_image_path}")
-
         # Load LR Image
         lr_response = s3_client.get_object(Bucket=S3_BUCKET, Key=lr_image_path)
         lr_img = Image.open(io.BytesIO(lr_response["Body"].read())).convert("RGB")
@@ -54,15 +44,13 @@ def load_images_from_s3(lr_image_path, hr_image_path):
         hr_response = s3_client.get_object(Bucket=S3_BUCKET, Key=hr_image_path)
         hr_img = Image.open(io.BytesIO(hr_response["Body"].read())).convert("RGB")
 
-        # **Upload Processed Images to S3**
-        save_image_to_s3(lr_img, f"processed_LR/{os.path.basename(lr_image_path)}")
-        save_image_to_s3(hr_img, f"processed_HR/{os.path.basename(hr_image_path)}")
+        # Resize LR image to match HR image dimensions
+        lr_img = lr_img.resize(hr_img.size, Image.BICUBIC)
 
         return lr_img, hr_img
     except Exception as e:
-        print(f"❌ Error loading images from S3: {e}")
+        print(f"Error loading images from S3: {e}")
         return None, None
-
 
 # Preprocessing
 transform = transforms.Compose([
@@ -92,12 +80,12 @@ def train_model():
             if lr_img is None or hr_img is None:
                 continue
 
-            # Resize LR image to match HR dimensions
-            lr_img = lr_img.resize(hr_img.size, Image.BICUBIC)
-
             # Convert to tensors
-            lr_tensor = transform(lr_img).unsqueeze(0)
-            hr_tensor = transform(hr_img).unsqueeze(0)
+            lr_tensor = transform(lr_img).unsqueeze(0)  # Shape: (1, 3, H, W)
+            hr_tensor = transform(hr_img).unsqueeze(0)  # Shape: (1, 3, H, W)
+
+            # Ensure both tensors have the same shape before training
+            assert lr_tensor.shape == hr_tensor.shape, f"Size mismatch: {lr_tensor.shape} vs {hr_tensor.shape}"
 
             # Forward pass
             output = model(lr_tensor)
@@ -125,3 +113,4 @@ train_model()
 
 # Stop Spark session
 spark.stop()
+

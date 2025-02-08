@@ -1,0 +1,6 @@
+boto3
+torch
+torchvision
+pillow
+numpy
+pyspark

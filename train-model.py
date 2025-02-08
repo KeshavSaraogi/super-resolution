@@ -18,13 +18,13 @@ CHECKPOINT_DIR = "s3://images-resolution/checkpoints/"
 # **✅ Optimized Spark Configuration**
 spark = SparkSession.builder \
     .appName("SRCNN Training") \
-    .config("spark.executor.instances", "8") \  
+    .config("spark.executor.instances", "8") \
     .config("spark.executor.cores", "2") \
-    .config("spark.executor.memory", "10g") \  
-    .config("spark.dynamicAllocation.enabled", "false") \  
-    .config("spark.executor.heartbeatInterval", "3600s") \  
-    .config("spark.network.timeout", "7200s") \  
-    .config("spark.task.maxFailures", "5") \  
+    .config("spark.executor.memory", "10g") \
+    .config("spark.dynamicAllocation.enabled", "false") \
+    .config("spark.executor.heartbeatInterval", "3600s") \
+    .config("spark.network.timeout", "7200s") \
+    .config("spark.task.maxFailures", "5") \
     .getOrCreate()
 
 # Initialize AWS S3 Client

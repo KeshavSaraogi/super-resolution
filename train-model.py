@@ -5,21 +5,32 @@ import torch.nn as nn
 import torch.optim as optim
 from torchvision import transforms
 from PIL import Image
+import os
 import io
 
-# Constants
+# **✅ Fixed S3 Paths**
 S3_BUCKET = "images-resolution"
-LR_FOLDER = "DIV2K_train_LR"
-HR_FOLDER = "DIV2K_train_HR"
+LR_FOLDER = "DIV2K_train_LR/DIV2K_train_LR"
+HR_FOLDER = "DIV2K_train_HR/DIV2K_train_HR"
 MODEL_OUTPUT_PATH = "s3://images-resolution/srcnn_model.pth"
+CHECKPOINT_DIR = "s3://images-resolution/checkpoints/"
 
-# Initialize Spark session
-spark = SparkSession.builder.appName("SRCNN Training").getOrCreate()
+# **✅ Optimized Spark Configuration**
+spark = SparkSession.builder \
+    .appName("SRCNN Training") \
+    .config("spark.executor.instances", "8") \  
+    .config("spark.executor.cores", "2") \
+    .config("spark.executor.memory", "10g") \  
+    .config("spark.dynamicAllocation.enabled", "false") \  
+    .config("spark.executor.heartbeatInterval", "3600s") \  
+    .config("spark.network.timeout", "7200s") \  
+    .config("spark.task.maxFailures", "5") \  
+    .getOrCreate()
 
-# Initialize S3 client
+# Initialize AWS S3 Client
 s3_client = boto3.client("s3")
 
-# Define SRCNN model
+# **✅ Define SRCNN Model**
 class SRCNN(nn.Module):
     def __init__(self):
         super(SRCNN, self).__init__()
@@ -33,9 +44,20 @@ class SRCNN(nn.Module):
         x = self.conv3(x)
         return x
 
-# Load images from S3
+# **✅ Save Intermediate Model Checkpoints to S3**
+def save_checkpoint(model, epoch):
+    buffer = io.BytesIO()
+    torch.save(model.state_dict(), buffer)
+    buffer.seek(0)
+    checkpoint_path = f"{CHECKPOINT_DIR}epoch_{epoch}.pth"
+    s3_client.put_object(Bucket=S3_BUCKET, Key=f"checkpoints/epoch_{epoch}.pth", Body=buffer)
+    print(f"✅ Checkpoint saved: {checkpoint_path}")
+
+# **✅ Load Images from S3**
 def load_images_from_s3(lr_image_path, hr_image_path):
     try:
+        print(f"📥 Loading images: {lr_image_path}, {hr_image_path}")
+
         # Load LR Image
         lr_response = s3_client.get_object(Bucket=S3_BUCKET, Key=lr_image_path)
         lr_img = Image.open(io.BytesIO(lr_response["Body"].read())).convert("RGB")
@@ -44,20 +66,17 @@ def load_images_from_s3(lr_image_path, hr_image_path):
         hr_response = s3_client.get_object(Bucket=S3_BUCKET, Key=hr_image_path)
         hr_img = Image.open(io.BytesIO(hr_response["Body"].read())).convert("RGB")
 
-        # Resize LR image to match HR image dimensions
-        lr_img = lr_img.resize(hr_img.size, Image.BICUBIC)
-
         return lr_img, hr_img
     except Exception as e:
-        print(f"Error loading images from S3: {e}")
+        print(f"❌ Error loading images from S3: {e}")
         return None, None
 
-# Preprocessing
+# **✅ Preprocessing**
 transform = transforms.Compose([
     transforms.ToTensor(),
 ])
 
-# Training function
+# **✅ Training Function**
 def train_model():
     model = SRCNN()
     criterion = nn.MSELoss()
@@ -68,6 +87,14 @@ def train_model():
     lr_image_paths = [obj["Key"] for obj in lr_objects if obj["Key"].endswith(".png")]
 
     hr_image_paths = [path.replace(LR_FOLDER, HR_FOLDER) for path in lr_image_paths]
+
+    # **🔹 Debugging Print Statements**
+    print(f"✅ Found {len(lr_image_paths)} images in S3 for training.")
+
+    # **Check if dataset is empty**
+    if len(lr_image_paths) == 0:
+        print("❌ No training images found. Exiting.")
+        exit()
 
     # Train on available images
     num_epochs = 5
@@ -80,12 +107,12 @@ def train_model():
             if lr_img is None or hr_img is None:
                 continue
 
-            # Convert to tensors
-            lr_tensor = transform(lr_img).unsqueeze(0)  # Shape: (1, 3, H, W)
-            hr_tensor = transform(hr_img).unsqueeze(0)  # Shape: (1, 3, H, W)
+            # Resize LR image to match HR dimensions
+            lr_img = lr_img.resize(hr_img.size, Image.BICUBIC)
 
-            # Ensure both tensors have the same shape before training
-            assert lr_tensor.shape == hr_tensor.shape, f"Size mismatch: {lr_tensor.shape} vs {hr_tensor.shape}"
+            # Convert to tensors
+            lr_tensor = transform(lr_img).unsqueeze(0)
+            hr_tensor = transform(hr_img).unsqueeze(0)
 
             # Forward pass
             output = model(lr_tensor)
@@ -98,9 +125,12 @@ def train_model():
 
             total_loss += loss.item()
 
-        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss:.4f}")
+        print(f"📢 Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss:.4f}")
+        
+        # **✅ Save checkpoint after each epoch**
+        save_checkpoint(model, epoch)
 
-    # Save trained model to S3
+    # **✅ Save trained model to S3**
     buffer = io.BytesIO()
     torch.save(model.state_dict(), buffer)
     buffer.seek(0)
@@ -108,9 +138,8 @@ def train_model():
 
     print("✅ Model training completed and saved to S3!")
 
-# Run training
+# **✅ Run Training**
 train_model()
 
-# Stop Spark session
+# **✅ Stop Spark Session**
 spark.stop()
-

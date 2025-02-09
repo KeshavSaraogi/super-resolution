@@ -1,6 +1,18 @@
+# Web UI
+streamlit
+
+# AWS SDK for downloading model from S3
 boto3
+
+# PyTorch & Torchvision for Deep Learning Model
 torch
 torchvision
+
+# Image Processing
 pillow
+
+# Data Processing
 numpy
+
+# PySpark for distributed processing (if needed)
 pyspark

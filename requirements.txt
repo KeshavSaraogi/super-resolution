@@ -16,3 +16,8 @@ numpy
 
 # PySpark for distributed processing (if needed)
 pyspark
+
+
+# Advancements
+opencv-python
+ffmpeg-python

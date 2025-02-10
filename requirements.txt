@@ -21,3 +21,6 @@ pyspark
 # Advancements
 opencv-python
 ffmpeg-python
+
+#Camera
+opencv-python

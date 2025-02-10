@@ -4,7 +4,7 @@ import torchvision.transforms as transforms
 import boto3
 import io
 from PIL import Image
-from model import SRCNN  # Import your trained model class
+from model import SRCNN  # Import the trained model class
 
 # **✅ Load Trained Model from S3**
 S3_BUCKET = "images-resolution"
@@ -35,22 +35,29 @@ def process_image(image):
     output_img = transforms.ToPILImage()(output.squeeze(0))
     return output_img
 
-# **✅ Streamlit UI**
-st.title("🖼️ Super-Resolution Image Enhancer")
-st.write("Upload a low-resolution image and enhance it using the trained SRCNN model.")
+# **✅ Streamlit UI Enhancements**
+st.set_page_config(page_title="Super-Resolution App", layout="wide")
 
-uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "png", "jpeg"])
+st.sidebar.title("⚙️ Options")
+st.sidebar.write("Upload a low-resolution image to enhance it.")
 
-if uploaded_file is not None:
-    image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Original Image", use_column_width=True)
+uploaded_files = st.sidebar.file_uploader("Choose images...", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+
+if uploaded_files:
+    col1, col2 = st.columns(2)
     
-    if st.button("Enhance Image"):
-        enhanced_image = process_image(image)
-        st.image(enhanced_image, caption="Enhanced Image", use_column_width=True)
-        
-        # Allow users to download the enhanced image
-        buf = io.BytesIO()
-        enhanced_image.save(buf, format="PNG")
-        buf.seek(0)
-        st.download_button("Download Enhanced Image", buf, "enhanced_image.png", "image/png")
+    for uploaded_file in uploaded_files:
+        image = Image.open(uploaded_file).convert("RGB")
+
+        with col1:
+            st.image(image, caption="Original Image", use_column_width=True)
+
+        with col2:
+            with st.spinner("🛠️ Enhancing image..."):
+                enhanced_image = process_image(image)
+                st.image(enhanced_image, caption="Enhanced Image", use_column_width=True)
+                
+                buf = io.BytesIO()
+                enhanced_image.save(buf, format="PNG")
+                buf.seek(0)
+                st.download_button("📥 Download Enhanced Image", buf, "enhanced_image.png", "image/png")

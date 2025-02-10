@@ -5,6 +5,8 @@ import boto3
 import io
 from PIL import Image
 from model import SRCNN  # Import the trained model class
+import numpy
+import cv2
 
 # **✅ Load Trained Model from S3**
 S3_BUCKET = "images-resolution"
@@ -61,3 +63,24 @@ if uploaded_files:
                 enhanced_image.save(buf, format="PNG")
                 buf.seek(0)
                 st.download_button("📥 Download Enhanced Image", buf, "enhanced_image.png", "image/png")
+
+
+st.sidebar.write("📸 Take a photo using your webcam:")
+
+if st.sidebar.button("Start Camera"):
+    cap = cv2.VideoCapture(0)
+    ret, frame = cap.read()
+    
+    if ret:
+        image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        st.image(image, caption="Captured Image", use_column_width=True)
+        
+        if st.button("Enhance Captured Image"):
+            enhanced_image = process_image(image)
+            st.image(enhanced_image, caption="Enhanced Image", use_column_width=True)
+            buf = io.BytesIO()
+            enhanced_image.save(buf, format="PNG")
+            buf.seek(0)
+            st.download_button("📥 Download Enhanced Image", buf, "enhanced_image.png", "image/png")
+    
+    cap.release()
